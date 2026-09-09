@@ -66,14 +66,12 @@ public enum InputPrivacyGuard {
         )
     }
 
+    /// Capture is privacy-sensitive even though the buffer is memory-only.
+    /// If Accessibility cannot prove which focused element owns the keystroke,
+    /// fail closed instead of collecting an unscoped system-wide event.
     public static func mayCaptureCurrentFocus() -> Bool {
         guard !isSecureEventInputEnabled else { return false }
-        guard let context = focusedContext() else {
-            // If Accessibility cannot prove the focused field is safe yet,
-            // event capture may still be used for the non-destructive probe;
-            // destructive recovery remains separately gated by AX snapshots.
-            return true
-        }
+        guard let context = focusedContext() else { return false }
         return !context.isSecure
     }
 
