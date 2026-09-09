@@ -67,6 +67,30 @@ final class InputContextTrackerTests: XCTestCase {
         XCTAssertEqual(signal?.previousBurst?.events.first?.keyCode, 14)
     }
 
+    func testFocusChangePreventsCrossFieldBurstRecovery() async {
+        let tracker = InputContextTracker()
+        await tracker.ingest(event(at: 10.0, source: "abc", keyCode: 8, focus: "field-A"))
+        await tracker.ingest(event(at: 10.1, source: "abc", keyCode: 14, focus: "field-A"))
+
+        // Same input source, different focused AX element: the previous field's
+        // burst must be discarded before collecting input in the new field.
+        await tracker.ingest(event(at: 10.2, source: "abc", keyCode: 0, focus: "field-B"))
+        let signal = await tracker.inputSourceDidChange(to: "pinyin", at: 10.3)
+
+        XCTAssertEqual(signal?.previousBurst?.events.count, 1)
+        XCTAssertEqual(signal?.previousBurst?.events.first?.focusIdentity, "field-B")
+    }
+
+    func testProcessChangePreventsCrossAppBurstRecovery() async {
+        let tracker = InputContextTracker()
+        await tracker.ingest(event(at: 10.0, source: "abc", keyCode: 8, pid: 100, focus: "field"))
+        await tracker.ingest(event(at: 10.1, source: "abc", keyCode: 14, pid: 200, focus: "field"))
+        let signal = await tracker.inputSourceDidChange(to: "pinyin", at: 10.2)
+
+        XCTAssertEqual(signal?.previousBurst?.events.count, 1)
+        XCTAssertEqual(signal?.previousBurst?.events.first?.sourcePID, 200)
+    }
+
     func testLifecycleBoundaryClearsSensitiveRecentState() async {
         let tracker = InputContextTracker()
         await tracker.ingest(event(at: 10.0, source: "abc", keyCode: 8))
@@ -84,6 +108,8 @@ final class InputContextTrackerTests: XCTestCase {
         at timestamp: TimeInterval,
         source: String,
         keyCode: CGKeyCode,
+        pid: pid_t = 123,
+        focus: String = "field",
         synthetic: Bool = false
     ) -> CapturedKeyEvent {
         CapturedKeyEvent(
@@ -91,8 +117,8 @@ final class InputContextTrackerTests: XCTestCase {
             keyCode: keyCode,
             flagsRawValue: 0,
             characters: nil,
-            sourcePID: 123,
-            focusIdentity: "field",
+            sourcePID: pid,
+            focusIdentity: focus,
             inputSourceID: source,
             isSynthetic: synthetic
         )
