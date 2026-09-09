@@ -19,7 +19,7 @@ final class RecoveryCoordinatorTests: XCTestCase {
             originalInputSourceID: "abc",
             targetInputSourceID: "pinyin",
             textSnapshot: AXTextSnapshot(text: "ceshi", rangeLocation: 0, rangeLength: 5),
-            rawEvents: [CapturedKeyEvent(timestamp: Date(), keyCode: 8, flags: [], isSynthetic: false)],
+            rawEvents: [makeEvent()],
             restoreIsReliable: false
         )
 
@@ -53,7 +53,7 @@ final class RecoveryCoordinatorTests: XCTestCase {
             originalInputSourceID: "abc",
             targetInputSourceID: "pinyin",
             textSnapshot: AXTextSnapshot(text: "ceshi", rangeLocation: 10, rangeLength: 5),
-            rawEvents: [CapturedKeyEvent(timestamp: Date(), keyCode: 8, flags: [], isSynthetic: false)],
+            rawEvents: [makeEvent()],
             restoreIsReliable: true
         )
 
@@ -71,6 +71,19 @@ final class RecoveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(text.operations[1], .rangeReplace(text: "ceshi", location: 10, length: 0))
         XCTAssertEqual(inputs.selectedIDs, ["pinyin", "abc"])
         XCTAssertEqual(replayer.replayCount, 1)
+    }
+
+    private func makeEvent() -> CapturedKeyEvent {
+        CapturedKeyEvent(
+            timestamp: Date().timeIntervalSince1970,
+            keyCode: 8,
+            flagsRawValue: 0,
+            characters: "c",
+            sourcePID: 123,
+            focusIdentity: "test-field",
+            inputSourceID: "abc",
+            isSynthetic: false
+        )
     }
 }
 
