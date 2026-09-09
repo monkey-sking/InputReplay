@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible InputReplay bug without sharing sensitive typed content.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include passwords, private messages, credentials, or raw sensitive key history. For security-sensitive issues, read SECURITY.md first.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: InputReplay version / commit
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the behavior without private content.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Minimal reproduction steps
+      description: Use synthetic/non-sensitive examples such as ceshiyixia.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: InputReplay diagnostics
+      description: Paste “Copy Diagnostics” output if relevant. It excludes typed content by default.
+      render: text
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety impact
+      options:
+        - label: InputReplay unexpectedly changed user-visible text.
+        - label: InputReplay captured/replayed in a secure or password context.
+        - label: Restore/Undo failed or produced duplicate/orphaned text.
+        - label: The issue does not involve destructive mutation or sensitive capture.
