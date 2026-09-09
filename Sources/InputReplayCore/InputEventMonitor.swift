@@ -4,10 +4,27 @@ import CoreGraphics
 public final class InputEventMonitor: @unchecked Sendable {
     public typealias EventHandler = @Sendable (CapturedKeyEvent) -> Void
 
+    private struct RawKeyEvent: Sendable {
+        let timestamp: TimeInterval
+        let keyCode: CGKeyCode
+        let flagsRawValue: UInt64
+        let characters: String?
+        let fallbackPID: pid_t
+        let inputSourceID: String
+        let isSynthetic: Bool
+        let isRepeat: Bool
+    }
+
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let inputSources: InputSourceController
     private let handler: EventHandler
+    private let processingQueue = DispatchQueue(
+        label: "com.inputreplay.event-processing",
+        qos: .userInteractive
+    )
+    private let stateLock = NSLock()
+    private var acceptingEvents = false
 
     public init(
         inputSources: InputSourceController = InputSourceController(),
@@ -27,7 +44,7 @@ public final class InputEventMonitor: @unchecked Sendable {
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
-            guard type == .keyDown, let userInfo else {
+            guard let userInfo else {
                 return Unmanaged.passUnretained(event)
             }
 
@@ -35,7 +52,19 @@ public final class InputEventMonitor: @unchecked Sendable {
                 .fromOpaque(userInfo)
                 .takeUnretainedValue()
 
-            monitor.consume(event)
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                monitor.reenableEventTap()
+                return Unmanaged.passUnretained(event)
+            }
+
+            guard type == .keyDown else {
+                return Unmanaged.passUnretained(event)
+            }
+
+            // Keep the event-tap callback extremely small. Cross-process AX
+            // inspection is deferred to a serial queue so slow host apps cannot
+            // cause macOS to disable the event tap while the user is typing.
+            monitor.enqueue(event)
             return Unmanaged.passUnretained(event)
         }
 
@@ -53,12 +82,14 @@ public final class InputEventMonitor: @unchecked Sendable {
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         eventTap = tap
         runLoopSource = source
+        setAcceptingEvents(true)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         return true
     }
 
     public func stop() {
+        setAcceptingEvents(false)
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -69,37 +100,86 @@ public final class InputEventMonitor: @unchecked Sendable {
         eventTap = nil
     }
 
-    private func consume(_ event: CGEvent) {
-        let marker = event.getIntegerValueField(.eventSourceUserData)
-        let isSynthetic = marker == SyntheticEventMarker.value
-        let focusedContext = InputPrivacyGuard.focusedContext()
+    private func enqueue(_ event: CGEvent) {
+        guard isAcceptingEvents() else { return }
 
-        // Physical capture is fail-closed: a recent key enters the in-memory
-        // timeline only when Accessibility can identify the focused element and
-        // prove it is not secure. Synthetic events are tagged and filtered by
-        // runtime consumers, so they do not become user-input history.
-        if !isSynthetic {
-            guard !InputPrivacyGuard.isSecureEventInputEnabled else { return }
-            guard let focusedContext, !focusedContext.isSecure else { return }
-        }
-
-        let fallbackPID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
-        let sourcePID = focusedContext?.processID ?? fallbackPID
-        let sourceID = inputSources.current()?.id ?? "unknown"
-
-        let captured = CapturedKeyEvent(
+        let raw = RawKeyEvent(
             timestamp: ProcessInfo.processInfo.systemUptime,
             keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
             flagsRawValue: event.flags.rawValue,
             characters: unicodeProjection(of: event),
-            sourcePID: sourcePID,
-            focusIdentity: focusedContext?.focusIdentity,
-            inputSourceID: sourceID,
-            isSynthetic: isSynthetic,
+            fallbackPID: pid_t(event.getIntegerValueField(.eventSourceUnixProcessID)),
+            inputSourceID: inputSources.current()?.id ?? "unknown",
+            isSynthetic: event.getIntegerValueField(.eventSourceUserData) == SyntheticEventMarker.value,
             isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         )
 
-        handler(captured)
+        processingQueue.async { [weak self] in
+            self?.process(raw)
+        }
+    }
+
+    private func process(_ raw: RawKeyEvent) {
+        guard isAcceptingEvents() else { return }
+
+        if raw.isSynthetic {
+            // Deliver the marker so diagnostic consumers can observe it, while
+            // InputReplayRuntime itself filters synthetic events before storage.
+            handler(
+                CapturedKeyEvent(
+                    timestamp: raw.timestamp,
+                    keyCode: raw.keyCode,
+                    flagsRawValue: raw.flagsRawValue,
+                    characters: raw.characters,
+                    sourcePID: raw.fallbackPID,
+                    focusIdentity: nil,
+                    inputSourceID: raw.inputSourceID,
+                    isSynthetic: true,
+                    isRepeat: raw.isRepeat
+                )
+            )
+            return
+        }
+
+        // Physical capture is fail-closed. Cross-process Accessibility work is
+        // done here, outside the EventTap callback.
+        guard !InputPrivacyGuard.isSecureEventInputEnabled else { return }
+        guard let focusedContext = InputPrivacyGuard.focusedContext(), !focusedContext.isSecure else {
+            return
+        }
+        guard isAcceptingEvents() else { return }
+
+        handler(
+            CapturedKeyEvent(
+                timestamp: raw.timestamp,
+                keyCode: raw.keyCode,
+                flagsRawValue: raw.flagsRawValue,
+                characters: raw.characters,
+                sourcePID: focusedContext.processID,
+                focusIdentity: focusedContext.focusIdentity,
+                inputSourceID: raw.inputSourceID,
+                isSynthetic: false,
+                isRepeat: raw.isRepeat
+            )
+        )
+    }
+
+    private func reenableEventTap() {
+        guard let tap = eventTap, isAcceptingEvents() else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func setAcceptingEvents(_ value: Bool) {
+        stateLock.lock()
+        acceptingEvents = value
+        stateLock.unlock()
+    }
+
+    private func isAcceptingEvents() -> Bool {
+        stateLock.lock()
+        let value = acceptingEvents
+        stateLock.unlock()
+        return value
     }
 
     private func unicodeProjection(of event: CGEvent) -> String? {
