@@ -34,18 +34,15 @@ public final class InputSourceController: @unchecked Sendable {
     public func select(id: String) -> Bool {
         let filter = [kTISPropertyInputSourceID: id] as CFDictionary
         guard let unmanaged = TISCreateInputSourceList(filter, false) else { return false }
-        let sources = unmanaged.takeRetainedValue() as NSArray
-        guard let source = sources.firstObject as? TISInputSource else { return false }
+        let sources = unmanaged.takeRetainedValue() as! [TISInputSource]
+        guard let source = sources.first else { return false }
         return TISSelectInputSource(source) == noErr
     }
 
     public func availableKeyboardInputSources() -> [InputSourceDescriptor] {
         guard let unmanaged = TISCreateInputSourceList(nil, false) else { return [] }
-        let sources = unmanaged.takeRetainedValue() as NSArray
-        return sources.compactMap { item in
-            guard let source = item as? TISInputSource else { return nil }
-            return descriptor(for: source)
-        }
+        let sources = unmanaged.takeRetainedValue() as! [TISInputSource]
+        return sources.compactMap(descriptor(for:))
     }
 
     public func startObserving(_ handler: @escaping ChangeHandler) {
