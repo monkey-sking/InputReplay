@@ -29,7 +29,8 @@ let package = Package(
             dependencies: ["InputReplayCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
-                .linkedFramework("ApplicationServices")
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("ServiceManagement")
             ]
         ),
         .testTarget(
