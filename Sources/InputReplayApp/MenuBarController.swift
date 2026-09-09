@@ -37,6 +37,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let accessibilityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let currentSourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let latestTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let latestBurstItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let chineseTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let latinTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let showHUDItem = NSMenuItem(title: AppStrings.showSwitchHUD, action: #selector(toggleSwitchHUD), keyEquivalent: "")
@@ -86,7 +87,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(titleItem)
         menu.addItem(.separator())
 
-        [monitoringItem, accessibilityItem, currentSourceItem, latestTargetItem, chineseTargetItem, latinTargetItem].forEach {
+        [
+            monitoringItem,
+            accessibilityItem,
+            currentSourceItem,
+            latestTargetItem,
+            latestBurstItem,
+            chineseTargetItem,
+            latinTargetItem
+        ].forEach {
             $0.isEnabled = false
             menu.addItem($0)
         }
@@ -159,8 +168,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         guard preferences.showSwitchHUD else { return }
         let sourceName = displayName(for: signal.newInputSourceID)
-        if signal.previousBurst?.events.isEmpty == false {
-            hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)", detail: AppStrings.replayAvailable)
+        if let burst = signal.previousBurst, !burst.events.isEmpty {
+            let preview = burstPreview(burst)
+            let detail = preview.isEmpty ? AppStrings.replayAvailable : "\(preview)  ·  \(AppStrings.replayAvailable)"
+            hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)", detail: detail, duration: 3.0)
         } else {
             hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)")
         }
@@ -183,12 +194,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 try replayEngine.replay(
                     events: burst.events,
                     through: signal.newInputSourceID,
+                    sourceSettleDelayMicroseconds: 50_000,
                     interKeyDelayMicroseconds: 2_500
                 )
+                let preview = burstPreview(burst)
+                let target = displayName(for: signal.newInputSourceID)
                 hud.show(
                     title: AppStrings.replaySent,
-                    detail: displayName(for: signal.newInputSourceID),
-                    duration: 3.0
+                    detail: preview.isEmpty ? target : "\(preview)  →  \(target)",
+                    duration: 3.4
                 )
             } catch {
                 hud.show(title: AppStrings.replayFailed, detail: String(describing: error), duration: 3.0)
@@ -254,6 +268,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "preferredLatin=\(preferences.preferredLatinInputSourceID ?? "unset")",
             "availableInputSources=\(report.availableInputSources.count)"
         ]
+
+        if let signal = lastSwitchSignal {
+            lines.append("lastSwitch=\(signal.previousInputSourceID) -> \(signal.newInputSourceID)")
+            if let burst = signal.previousBurst {
+                let projection = TypingProjector.project(burst.events)
+                lines.append("lastBurstEvents=\(burst.events.count)")
+                lines.append("lastBurstProjectionReliable=\(projection.isTextProjectionReliable)")
+                lines.append("lastBurstHadBackspace=\(projection.hadBackspace)")
+                lines.append("lastBurstPreview=\(sanitizeEvidence(projection.visibleTextEstimate))")
+            }
+        }
+
         for source in report.availableInputSources {
             lines.append("- \(source.id) [\(source.localizedName ?? "")] bundle=\(source.bundleIdentifier ?? "")")
         }
@@ -289,9 +315,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let latestTarget = lastSwitchSignal.map { displayName(for: $0.newInputSourceID) } ?? AppStrings.noTarget
         latestTargetItem.title = "\(AppStrings.replayTarget)：\(latestTarget)"
 
+        if let burst = lastSwitchSignal?.previousBurst, !burst.events.isEmpty {
+            let preview = burstPreview(burst)
+            latestBurstItem.title = AppStrings.choose(
+                "上一段：\(preview.isEmpty ? "（复杂输入）" : preview)",
+                "Previous burst: \(preview.isEmpty ? "(complex input)" : preview)"
+            )
+        } else {
+            latestBurstItem.title = AppStrings.choose("上一段：暂无", "Previous burst: None")
+        }
+
         chineseTargetItem.title = "中文目标 / Chinese: \(displayName(for: preferences.preferredChineseInputSourceID))"
         latinTargetItem.title = "英文目标 / Latin: \(displayName(for: preferences.preferredLatinInputSourceID))"
         showHUDItem.state = preferences.showSwitchHUD ? .on : .off
+    }
+
+    private func burstPreview(_ burst: TypingBurst) -> String {
+        let projection = TypingProjector.project(burst.events)
+        guard projection.isTextProjectionReliable else { return "" }
+        let text = projection.visibleTextEstimate
+            .replacingOccurrences(of: "\n", with: "↵")
+            .replacingOccurrences(of: "\t", with: "⇥")
+        if text.count <= 42 { return text }
+        let end = text.index(text.startIndex, offsetBy: 39)
+        return String(text[..<end]) + "…"
+    }
+
+    private func sanitizeEvidence(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     private func displayName(for inputSourceID: String?) -> String {
