@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import InputReplayCore
 
 final class InputContextTrackerTests: XCTestCase {
@@ -11,20 +12,23 @@ final class InputContextTrackerTests: XCTestCase {
         await tracker.ingest(event(at: 10.1, source: "abc", keyCode: 14))
 
         let signal = await tracker.inputSourceDidChange(to: "pinyin", at: 10.2)
+        let pending = await tracker.pendingSuggestion(at: 10.3)
         XCTAssertEqual(signal?.previousInputSourceID, "abc")
         XCTAssertEqual(signal?.newInputSourceID, "pinyin")
         XCTAssertEqual(signal?.previousBurst?.events.count, 2)
-        XCTAssertNotNil(await tracker.pendingSuggestion(at: 10.3))
+        XCTAssertNotNil(pending)
     }
 
     func testNewPhysicalTypingInvalidatesOldSuggestion() async {
         let tracker = InputContextTracker()
         await tracker.ingest(event(at: 10.0, source: "abc", keyCode: 8))
         _ = await tracker.inputSourceDidChange(to: "pinyin", at: 10.1)
-        XCTAssertNotNil(await tracker.pendingSuggestion(at: 10.2))
+        let beforeTyping = await tracker.pendingSuggestion(at: 10.2)
+        XCTAssertNotNil(beforeTyping)
 
         await tracker.ingest(event(at: 10.3, source: "pinyin", keyCode: 0))
-        XCTAssertNil(await tracker.pendingSuggestion(at: 10.31))
+        let afterTyping = await tracker.pendingSuggestion(at: 10.31)
+        XCTAssertNil(afterTyping)
     }
 
     func testSyntheticReplayDoesNotInvalidateSuggestion() async {
@@ -33,7 +37,8 @@ final class InputContextTrackerTests: XCTestCase {
         _ = await tracker.inputSourceDidChange(to: "pinyin", at: 10.1)
 
         await tracker.ingest(event(at: 10.2, source: "pinyin", keyCode: 8, synthetic: true))
-        XCTAssertNotNil(await tracker.pendingSuggestion(at: 10.3))
+        let pending = await tracker.pendingSuggestion(at: 10.3)
+        XCTAssertNotNil(pending)
     }
 
     func testRapidDuplicateSourceChangesAreDebounced() async {
@@ -43,10 +48,11 @@ final class InputContextTrackerTests: XCTestCase {
         await tracker.ingest(event(at: 10.0, source: "abc", keyCode: 8))
         let first = await tracker.inputSourceDidChange(to: "pinyin", at: 10.2)
         let duplicate = await tracker.inputSourceDidChange(to: "abc", at: 10.25)
+        let epoch = await tracker.epoch()
 
         XCTAssertNotNil(first)
         XCTAssertNil(duplicate)
-        XCTAssertEqual((await tracker.epoch())?.inputSourceID, "pinyin")
+        XCTAssertEqual(epoch?.inputSourceID, "pinyin")
     }
 
     func testIdleGapStartsNewBurstWithinSameEpoch() async {
@@ -68,8 +74,10 @@ final class InputContextTrackerTests: XCTestCase {
 
         await tracker.invalidateForLifecycleBoundary()
 
-        XCTAssertNil(await tracker.pendingSuggestion(at: 10.2))
-        XCTAssertNil(await tracker.epoch())
+        let pending = await tracker.pendingSuggestion(at: 10.2)
+        let epoch = await tracker.epoch()
+        XCTAssertNil(pending)
+        XCTAssertNil(epoch)
     }
 
     private func event(
