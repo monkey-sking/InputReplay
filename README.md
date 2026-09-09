@@ -58,23 +58,27 @@ Continue / Restore / Undo
 
 ## What is implemented now
 
-The current core includes:
+The current branch includes:
 
+- a runnable macOS menu-bar app;
 - physical key-event capture with synthetic-event tagging;
-- short-lived in-memory keystroke ring buffer;
+- a short-lived in-memory keystroke ring buffer;
 - macOS TIS input-source discovery, selection, and change observation;
 - input-source epochs and typing bursts;
 - debounced input-source-switch signals;
 - expiring recovery suggestions that are invalidated as soon as new physical typing begins;
+- hard boundaries across apps and focused text fields;
 - Unicode event projection for punctuation, whitespace, Backspace, and boundary analysis;
 - adapter-configurable boundary policies for Pinyin-like and code-based IMEs;
-- Accessibility focused-text snapshot and replacement primitives with secure-field exclusion;
+- Accessibility focused-text snapshot and replacement primitives;
+- Secure Event Input / password-field capture and replay blocking;
 - transactional recovery coordinator with a fail-closed mutation gate;
 - exact post-replay-range verification contract;
 - synthetic physical-key replay engine;
 - compatibility evidence registry using `Prepared / Observed / Verified` states;
-- non-destructive diagnostics and probe CLI;
-- macOS GitHub Actions CI and core safety/state-machine tests.
+- a non-destructive diagnostics/probe CLI;
+- a local `.app` / zip packaging script;
+- macOS GitHub Actions CI that builds, tests, packages, validates and uploads a development app artifact.
 
 ## Current verification status
 
@@ -83,11 +87,12 @@ The current core includes:
 On GitHub-hosted macOS (`macOS 15.7.9`, `Xcode 16.4`, `Swift 6.1.2`):
 
 - Swift package resolution succeeds;
-- the core builds successfully;
+- the core and menu-bar app build successfully;
 - unit tests pass;
 - source-switch state-machine tests pass;
 - recovery coordinator safety tests pass;
-- punctuation / whitespace / Backspace projection tests pass.
+- punctuation / whitespace / Backspace projection tests pass;
+- the `.app` bundle, Info.plist validation, executable check, and development zip packaging succeed.
 
 ### Still requires a real interactive Mac
 
@@ -111,10 +116,63 @@ Direction: Latin -> IME
 
 See [`docs/REAL_MAC_TEST_PLAN.md`](docs/REAL_MAC_TEST_PLAN.md).
 
+## Package a local test app
+
+Requires macOS 13+ and Xcode / Xcode Command Line Tools.
+
+```bash
+git clone https://github.com/monkey-sking/InputReplay.git
+cd InputReplay
+git checkout dev/core-replay-spike
+bash scripts/package-app.sh
+open dist/InputReplay.app
+```
+
+Outputs:
+
+```text
+dist/InputReplay.app
+dist/InputReplay-0.1.0-dev.zip
+```
+
+On first launch, open the InputReplay menu-bar item. If Accessibility is required, use `Open Accessibility Settings…`, allow InputReplay in System Settings, then choose `Restart Monitoring`.
+
+### Most important smoke test
+
+1. Open TextEdit and select Apple ABC.
+2. Type `ceshiyixia`.
+3. Do not type anything else.
+4. Switch to Apple Pinyin.
+5. InputReplay should show a lightweight HUD with the previous burst preview.
+6. Within six seconds press `Control + Option + R`.
+7. The current development build **does not delete the original `ceshiyixia`**. It only re-sends the same physical keys through the newly selected Pinyin input source.
+8. Observe whether normal Pinyin composition / candidates appear.
+9. Choose `Copy Diagnostics` from the menu and record the result.
+
+This smoke test is intentionally non-destructive. Full recovery remains gated until replay behavior and the exact replay-output range are verified on a real Mac.
+
+See [`docs/PACKAGING.md`](docs/PACKAGING.md) for packaging details and [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.md) for the compatibility test matrix.
+
+## Privacy and Secure Input
+
+InputReplay is a system-wide keyboard utility, so capture defaults are fail-closed:
+
+- recent key metadata is memory-only and is not persisted or uploaded;
+- if Accessibility cannot identify the current focused element, physical keystrokes do not enter the ring buffer;
+- macOS Secure Event Input blocks capture and replay;
+- Secure / Password text fields block capture and replay;
+- changing app or focused field ends the previous typing burst;
+- sleep/wake, listener restart, and `Clear Recent Input Buffer` clear short-lived state;
+- InputReplay's own synthetic replay events are tagged and excluded from user-input history.
+
+The menu-bar app surfaces protected mode with a lock icon and refuses the experimental replay action while secure input is active.
+
 ## Architecture
 
 ```text
 InputEventMonitor
+    ↓
+InputPrivacyGuard
     ↓
 KeystrokeRingBuffer
     ↓
@@ -174,6 +232,17 @@ Initial compatibility priorities:
 
 See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
+## Whitespace, punctuation and Backspace
+
+Detection and replay intentionally use different representations:
+
+- **Replay history** keeps the actual physical keyCode / flags sequence.
+- **Typing projection** estimates the recently visible text for detection and boundary analysis.
+
+A Pinyin-like policy may keep whitespace inside the candidate suffix while punctuation ends a segment. A code-based IME policy may treat whitespace as a stronger commit boundary. Backspace updates the visible-text projection without rewriting raw replay history.
+
+If Cmd-V, Forward Delete, Escape, or another operation makes event-only reconstruction unsafe, projection becomes unreliable and later stages must use Accessibility / host state rather than guessing.
+
 ## Safety contract
 
 > **If InputReplay cannot establish a reliable restore plan before changing user-visible text, it must not perform an automatic destructive mutation.**
@@ -186,9 +255,7 @@ Manual recovery and non-destructive suggestions are always preferable to irrever
 
 ## Developer probe
 
-The current probe intentionally avoids exposing destructive end-to-end recovery.
-
-Useful commands:
+The menu-bar app is the preferred real-Mac smoke-test surface. The CLI probe remains useful for lower-level diagnostics:
 
 ```bash
 swift build
@@ -201,7 +268,23 @@ swift run InputReplayProbe capture
 swift run InputReplayProbe snapshot-before-caret 10
 ```
 
-`capture` records only short-lived in-memory key-event metadata for development. Do not use it around passwords, secure fields, or private content.
+`capture` records only short-lived in-memory key-event metadata and only when a non-secure focused element can be identified.
+
+## Why automatic correction is not enabled yet
+
+A false positive is more expensive than missing several opportunities to help. The intended progression is:
+
+```text
+Manual Recovery
+    ↓
+Switch Suggestion
+    ↓
+High-confidence Suggest
+    ↓
+Auto Fix only after evidence
+```
+
+InputReplay will not equate “looks like Pinyin” with “safe to rewrite user content” until real-world evidence supports it.
 
 ## Roadmap
 
@@ -223,4 +306,4 @@ The InputReplay name, logo, and official distribution identity are not granted b
 
 Early implementation / technical validation.
 
-The core architecture, safety contracts, and CI are now in place, but real IME recovery compatibility is still being validated tuple by tuple. Compatibility claims should use the project's `Prepared / Observed / Verified` terminology instead of assuming that code existence equals real-world support.
+The core architecture, safety contracts, CI, menu-bar app, and packaging pipeline are in place, but real IME recovery compatibility is still being validated tuple by tuple. Compatibility claims should use the project's `Prepared / Observed / Verified` terminology instead of assuming that code existence equals real-world support.
