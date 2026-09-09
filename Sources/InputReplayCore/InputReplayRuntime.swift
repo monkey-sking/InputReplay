@@ -7,10 +7,12 @@ import Foundation
 /// recovery by itself and therefore cannot mutate user text.
 public final class InputReplayRuntime: @unchecked Sendable {
     public typealias SwitchSuggestionHandler = @Sendable (InputSourceSwitchSignal) -> Void
+    public typealias PhysicalEventFilter = InputEventMonitor.PhysicalEventFilter
 
     private let inputSources: InputSourceController
     private let ringBuffer: KeystrokeRingBuffer
     private let contextTracker: InputContextTracker
+    private let physicalEventFilter: PhysicalEventFilter
     private let suggestionHandler: SwitchSuggestionHandler
 
     private var eventMonitor: InputEventMonitor?
@@ -20,11 +22,13 @@ public final class InputReplayRuntime: @unchecked Sendable {
         inputSources: InputSourceController = InputSourceController(),
         ringBuffer: KeystrokeRingBuffer = KeystrokeRingBuffer(),
         contextTracker: InputContextTracker = InputContextTracker(),
+        physicalEventFilter: @escaping PhysicalEventFilter = { _ in true },
         suggestionHandler: @escaping SwitchSuggestionHandler
     ) {
         self.inputSources = inputSources
         self.ringBuffer = ringBuffer
         self.contextTracker = contextTracker
+        self.physicalEventFilter = physicalEventFilter
         self.suggestionHandler = suggestionHandler
     }
 
@@ -61,7 +65,10 @@ public final class InputReplayRuntime: @unchecked Sendable {
             }
         }
 
-        let monitor = InputEventMonitor(inputSources: inputSources) { [weak self] event in
+        let monitor = InputEventMonitor(
+            inputSources: inputSources,
+            physicalEventFilter: physicalEventFilter
+        ) { [weak self] event in
             guard let self, !event.isSynthetic else { return }
             Task {
                 await self.ringBuffer.append(event)
