@@ -21,6 +21,7 @@ public final class ReplayEngine: @unchecked Sendable {
     public func replay(
         events: [CapturedKeyEvent],
         through targetInputSourceID: String,
+        sourceSettleDelayMicroseconds: useconds_t = 40_000,
         interKeyDelayMicroseconds: useconds_t = 1_500
     ) throws {
         let replayable = events.filter { !$0.isSynthetic }
@@ -28,6 +29,13 @@ public final class ReplayEngine: @unchecked Sendable {
 
         guard inputSources.select(id: targetInputSourceID) else {
             throw ReplayEngineError.inputSourceSelectionFailed(targetInputSourceID)
+        }
+
+        // CJK IMEs can need a short stabilization window after TIS selection.
+        // Keep this explicit and configurable so compatibility probes can tune
+        // the value per host/IME tuple instead of relying on race-prone replay.
+        if sourceSettleDelayMicroseconds > 0 {
+            usleep(sourceSettleDelayMicroseconds)
         }
 
         for captured in replayable {
