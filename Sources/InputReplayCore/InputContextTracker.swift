@@ -111,6 +111,22 @@ public actor InputContextTracker {
             return nil
         }
 
+        if let epoch = currentEpoch,
+           focusChanged(from: epoch, sourcePID: sourcePID, focusIdentity: focusIdentity) {
+            // The user moved to another app/field and then changed input source
+            // before typing. The old burst belongs to the previous focus and is
+            // not a valid recovery candidate in the new field.
+            pendingSwitchSignal = nil
+            lastAcceptedSwitchAt = time
+            startEpoch(
+                inputSourceID: newInputSourceID,
+                at: time,
+                sourcePID: sourcePID,
+                focusIdentity: focusIdentity
+            )
+            return nil
+        }
+
         let previousSourceID = currentEpoch?.inputSourceID
         guard let previousSourceID, previousSourceID != newInputSourceID else {
             if currentEpoch == nil {
@@ -189,12 +205,24 @@ public actor InputContextTracker {
     }
 
     private func focusChanged(from epoch: InputSourceEpoch, to event: CapturedKeyEvent) -> Bool {
-        if epoch.sourcePID != 0, event.sourcePID != 0, epoch.sourcePID != event.sourcePID {
+        focusChanged(
+            from: epoch,
+            sourcePID: event.sourcePID,
+            focusIdentity: event.focusIdentity
+        )
+    }
+
+    private func focusChanged(
+        from epoch: InputSourceEpoch,
+        sourcePID: pid_t,
+        focusIdentity: String?
+    ) -> Bool {
+        if epoch.sourcePID != 0, sourcePID != 0, epoch.sourcePID != sourcePID {
             return true
         }
 
         if let oldFocus = epoch.focusIdentity,
-           let newFocus = event.focusIdentity,
+           let newFocus = focusIdentity,
            oldFocus != newFocus {
             return true
         }
