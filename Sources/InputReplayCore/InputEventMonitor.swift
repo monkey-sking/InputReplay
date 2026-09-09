@@ -3,6 +3,7 @@ import CoreGraphics
 
 public final class InputEventMonitor: @unchecked Sendable {
     public typealias EventHandler = @Sendable (CapturedKeyEvent) -> Void
+    public typealias PhysicalEventFilter = @Sendable (CapturedKeyEvent) -> Bool
 
     private struct RawKeyEvent: Sendable {
         let timestamp: TimeInterval
@@ -18,6 +19,7 @@ public final class InputEventMonitor: @unchecked Sendable {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let inputSources: InputSourceController
+    private let physicalEventFilter: PhysicalEventFilter
     private let handler: EventHandler
     private let processingQueue = DispatchQueue(
         label: "com.inputreplay.event-processing",
@@ -28,9 +30,11 @@ public final class InputEventMonitor: @unchecked Sendable {
 
     public init(
         inputSources: InputSourceController = InputSourceController(),
+        physicalEventFilter: @escaping PhysicalEventFilter = { _ in true },
         handler: @escaping EventHandler
     ) {
         self.inputSources = inputSources
+        self.physicalEventFilter = physicalEventFilter
         self.handler = handler
     }
 
@@ -149,19 +153,22 @@ public final class InputEventMonitor: @unchecked Sendable {
         }
         guard isAcceptingEvents() else { return }
 
-        handler(
-            CapturedKeyEvent(
-                timestamp: raw.timestamp,
-                keyCode: raw.keyCode,
-                flagsRawValue: raw.flagsRawValue,
-                characters: raw.characters,
-                sourcePID: focusedContext.processID,
-                focusIdentity: focusedContext.focusIdentity,
-                inputSourceID: raw.inputSourceID,
-                isSynthetic: false,
-                isRepeat: raw.isRepeat
-            )
+        let captured = CapturedKeyEvent(
+            timestamp: raw.timestamp,
+            keyCode: raw.keyCode,
+            flagsRawValue: raw.flagsRawValue,
+            characters: raw.characters,
+            sourcePID: focusedContext.processID,
+            focusIdentity: focusedContext.focusIdentity,
+            inputSourceID: raw.inputSourceID,
+            isSynthetic: false,
+            isRepeat: raw.isRepeat
         )
+
+        // Product shortcuts must not become user content or invalidate the
+        // recovery window they are trying to activate.
+        guard physicalEventFilter(captured) else { return }
+        handler(captured)
     }
 
     private func reenableEventTap() {
