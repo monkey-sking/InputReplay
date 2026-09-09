@@ -1,0 +1,77 @@
+name: IME / App compatibility report
+description: Report observed InputReplay behavior for a specific IME and host app.
+title: "[Compatibility] "
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste passwords, private messages, or raw sensitive text. InputReplay compatibility is tracked per IME × host app × direction.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.7"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: InputReplay version / commit
+      placeholder: "0.1.0-dev / abc1234"
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host app and version
+      placeholder: "TextEdit / Safari / WeChat / VS Code..."
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source input method
+      placeholder: "Apple ABC"
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target input method
+      placeholder: "Apple Pinyin - Simplified"
+    validations:
+      required: true
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Direction
+      options:
+        - Latin -> IME
+        - IME -> Latin
+        - IME -> IME
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: observed
+    attributes:
+      label: What did you observe?
+      options:
+        - label: Input-source change was detected.
+        - label: Previous typing burst was detected.
+        - label: Safe smoke replay was accepted by the target IME.
+        - label: Normal IME composition/candidates appeared.
+        - label: Original text remained unchanged during smoke replay.
+        - label: Focus safety blocked replay when the field changed.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Keep examples non-sensitive and minimal.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: InputReplay diagnostics
+      description: Paste the output of “Copy Diagnostics”. It excludes typed content by default.
+      render: text
