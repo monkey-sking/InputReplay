@@ -7,7 +7,7 @@ final class RecoveryCoordinatorTests: XCTestCase {
         let text = FakeTextEditor()
         let inputs = FakeInputSources()
         let replayer = FakeReplayer()
-        let verifier = FakeVerifier(result: true)
+        let verifier = FakeVerifier(result: .init(succeeded: true, replayOutputRange: CFRange(location: 0, length: 2)))
         let coordinator = RecoveryCoordinator(
             textEditor: text,
             inputSources: inputs,
@@ -37,11 +37,13 @@ final class RecoveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(replayer.replayCount, 0)
     }
 
-    func testVerificationFailureRestoresOriginalTextAndInputSource() async {
+    func testVerificationFailureWithKnownRangeRestoresOriginalTextAndInputSource() async {
         let text = FakeTextEditor()
         let inputs = FakeInputSources()
         let replayer = FakeReplayer()
-        let verifier = FakeVerifier(result: false)
+        let verifier = FakeVerifier(
+            result: .init(succeeded: false, replayOutputRange: CFRange(location: 10, length: 2))
+        )
         let coordinator = RecoveryCoordinator(
             textEditor: text,
             inputSources: inputs,
@@ -68,8 +70,42 @@ final class RecoveryCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(text.operations.count, 2)
         XCTAssertEqual(text.operations[0], .snapshotReplace(text: "", location: 10, length: 5))
-        XCTAssertEqual(text.operations[1], .rangeReplace(text: "ceshi", location: 10, length: 0))
+        XCTAssertEqual(text.operations[1], .rangeReplace(text: "ceshi", location: 10, length: 2))
         XCTAssertEqual(inputs.selectedIDs, ["pinyin", "abc"])
+        XCTAssertEqual(replayer.replayCount, 1)
+    }
+
+    func testVerificationFailureWithoutKnownRangeRefusesGuessedRestore() async {
+        let text = FakeTextEditor()
+        let inputs = FakeInputSources()
+        let replayer = FakeReplayer()
+        let verifier = FakeVerifier(result: .init(succeeded: false, replayOutputRange: nil))
+        let coordinator = RecoveryCoordinator(
+            textEditor: text,
+            inputSources: inputs,
+            replayer: replayer,
+            verifier: verifier
+        )
+
+        let plan = RecoveryPlan(
+            originalInputSourceID: "abc",
+            targetInputSourceID: "pinyin",
+            textSnapshot: AXTextSnapshot(text: "ceshi", rangeLocation: 10, rangeLength: 5),
+            rawEvents: [makeEvent()],
+            restoreIsReliable: true
+        )
+
+        do {
+            _ = try await coordinator.recover(plan)
+            XCTFail("Expected restore failure")
+        } catch let error as RecoveryCoordinatorError {
+            XCTAssertEqual(error, .restoreFailed)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(text.operations, [.snapshotReplace(text: "", location: 10, length: 5)])
+        XCTAssertEqual(inputs.selectedIDs, ["pinyin"])
         XCTAssertEqual(replayer.replayCount, 1)
     }
 
@@ -120,6 +156,6 @@ private final class FakeReplayer: RecoveryReplaying, @unchecked Sendable {
 }
 
 private struct FakeVerifier: RecoveryVerifying {
-    let result: Bool
-    func verify(plan: RecoveryPlan) async -> Bool { result }
+    let result: RecoveryVerificationResult
+    func verify(plan: RecoveryPlan) async -> RecoveryVerificationResult { result }
 }
