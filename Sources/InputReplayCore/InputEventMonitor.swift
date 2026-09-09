@@ -79,13 +79,29 @@ public final class InputEventMonitor: @unchecked Sendable {
             timestamp: ProcessInfo.processInfo.systemUptime,
             keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
             flagsRawValue: event.flags.rawValue,
-            characters: nil,
+            characters: unicodeProjection(of: event),
             sourcePID: sourcePID,
             focusIdentity: nil,
             inputSourceID: sourceID,
-            isSynthetic: isSynthetic
+            isSynthetic: isSynthetic,
+            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         )
 
         handler(captured)
+    }
+
+    private func unicodeProjection(of event: CGEvent) -> String? {
+        var actualLength = 0
+        var buffer = [UniChar](repeating: 0, count: 16)
+        buffer.withUnsafeMutableBufferPointer { pointer in
+            event.keyboardGetUnicodeString(
+                maxStringLength: pointer.count,
+                actualStringLength: &actualLength,
+                unicodeString: pointer.baseAddress
+            )
+        }
+
+        guard actualLength > 0 else { return nil }
+        return String(utf16CodeUnits: buffer, count: actualLength)
     }
 }
