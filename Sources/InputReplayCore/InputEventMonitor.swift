@@ -74,11 +74,13 @@ public final class InputEventMonitor: @unchecked Sendable {
         let isSynthetic = marker == SyntheticEventMarker.value
         let focusedContext = InputPrivacyGuard.focusedContext()
 
-        // Never put physical key events from password / Secure Event Input
-        // contexts into the recent-input timeline.
+        // Physical capture is fail-closed: a recent key enters the in-memory
+        // timeline only when Accessibility can identify the focused element and
+        // prove it is not secure. Synthetic events are tagged and filtered by
+        // runtime consumers, so they do not become user-input history.
         if !isSynthetic {
-            if InputPrivacyGuard.isSecureEventInputEnabled { return }
-            if focusedContext?.isSecure == true { return }
+            guard !InputPrivacyGuard.isSecureEventInputEnabled else { return }
+            guard let focusedContext, !focusedContext.isSecure else { return }
         }
 
         let fallbackPID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
