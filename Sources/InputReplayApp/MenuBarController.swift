@@ -35,6 +35,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let monitoringItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let accessibilityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let privacyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let currentSourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let latestTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let latestBurstItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -67,14 +68,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func configureStatusItem() {
-        if let button = statusItem.button {
-            button.image = NSImage(
-                systemSymbolName: "keyboard.badge.ellipsis",
-                accessibilityDescription: AppStrings.appName
-            )
-            button.imagePosition = .imageOnly
-            button.toolTip = "InputReplay"
-        }
+        refreshStatusIcon()
         statusItem.menu = menu
     }
 
@@ -90,6 +84,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         [
             monitoringItem,
             accessibilityItem,
+            privacyItem,
             currentSourceItem,
             latestTargetItem,
             latestBurstItem,
@@ -163,6 +158,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func handleSwitchSignal(_ signal: InputSourceSwitchSignal) {
+        if InputPrivacyGuard.isSecureEventInputEnabled {
+            Task { [weak self] in
+                guard let self else { return }
+                await runtime.clearSensitiveRecentState()
+                lastSwitchSignal = nil
+                refreshStatusLines()
+            }
+            return
+        }
+
         lastSwitchSignal = signal
         refreshStatusLines()
 
@@ -178,6 +183,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func replayPreviousBurst() {
+        guard InputPrivacyGuard.mayReplayIntoCurrentFocus() else {
+            Task { [weak self] in
+                guard let self else { return }
+                await runtime.clearSensitiveRecentState()
+                lastSwitchSignal = nil
+                refreshStatusLines()
+                hud.show(title: AppStrings.secureInputBlocked, duration: 3.0)
+            }
+            return
+        }
+
         guard showExperimentalReplayWarningIfNeeded() else { return }
 
         Task { [weak self] in
@@ -261,6 +277,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "InputReplay \(AppStrings.version)",
             "macOS=\(report.macOSVersion)",
             "accessibilityTrusted=\(report.accessibilityTrusted)",
+            "secureEventInput=\(InputPrivacyGuard.isSecureEventInputEnabled)",
+            "focusedContextSecure=\(InputPrivacyGuard.focusedContext()?.isSecure ?? false)",
             "monitoringStarted=\(monitoringStarted)",
             "frontmostApp=\(report.frontmostAppBundleIdentifier ?? "unknown") [\(report.frontmostAppName ?? "")]",
             "currentInputSource=\(report.currentInputSource?.id ?? "unknown") [\(report.currentInputSource?.localizedName ?? "")]",
@@ -309,6 +327,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         monitoringItem.title = monitoringStarted ? AppStrings.monitoringOn : AppStrings.monitoringOff
         accessibilityItem.title = AXIsProcessTrusted() ? AppStrings.accessibilityGranted : AppStrings.accessibilityRequired
 
+        let secure = InputPrivacyGuard.isSecureEventInputEnabled || InputPrivacyGuard.focusedContext()?.isSecure == true
+        privacyItem.title = AppStrings.choose(
+            secure ? "安全输入：已保护（暂停捕获）" : "安全输入：普通",
+            secure ? "Secure input: Protected (capture paused)" : "Secure input: Normal"
+        )
+
         let current = inputSources.current()
         currentSourceItem.title = "\(AppStrings.currentInputSource)：\(current?.localizedName ?? current?.id ?? AppStrings.noTarget)"
 
@@ -328,6 +352,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         chineseTargetItem.title = "中文目标 / Chinese: \(displayName(for: preferences.preferredChineseInputSourceID))"
         latinTargetItem.title = "英文目标 / Latin: \(displayName(for: preferences.preferredLatinInputSourceID))"
         showHUDItem.state = preferences.showSwitchHUD ? .on : .off
+        refreshStatusIcon(secure: secure)
+    }
+
+    private func refreshStatusIcon(secure: Bool? = nil) {
+        guard let button = statusItem.button else { return }
+        let protected = secure ?? InputPrivacyGuard.isSecureEventInputEnabled
+        let symbol = protected ? "lock.shield" : "keyboard.badge.ellipsis"
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: AppStrings.appName)
+        button.imagePosition = .imageOnly
+        button.toolTip = protected ? AppStrings.secureInputBlocked : "InputReplay"
     }
 
     private func burstPreview(_ burst: TypingBurst) -> String {
