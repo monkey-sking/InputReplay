@@ -74,7 +74,13 @@ struct InputReplayProbe {
                 Task {
                     await buffer.append(event)
                     let count = await buffer.snapshot().count
-                    print("keyCode=\(event.keyCode) source=\(event.inputSourceID) buffer=\(count)")
+                    let characters = event.characters?
+                        .replacingOccurrences(of: "\n", with: "\\n")
+                        .replacingOccurrences(of: "\t", with: "\\t") ?? "∅"
+                    print(
+                        "keyCode=\(event.keyCode) chars=\(characters) repeat=\(event.isRepeat) " +
+                        "source=\(event.inputSourceID) buffer=\(count)"
+                    )
                 }
             }
 
