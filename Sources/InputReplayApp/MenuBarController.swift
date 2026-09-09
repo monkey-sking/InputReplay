@@ -14,11 +14,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let replayEngine: ReplayEngine
     private let preferences = AppPreferences()
     private let hud = HUDPresenter()
+    private let launchAtLogin = LaunchAtLoginController()
+
+    private lazy var recoveryCoordinator = RecoveryCoordinator(
+        inputSources: inputSources,
+        replayer: replayEngine,
+        verifier: ConservativeRecoveryVerifier()
+    )
 
     private lazy var runtime = InputReplayRuntime(
         inputSources: inputSources,
         ringBuffer: ringBuffer,
-        contextTracker: contextTracker
+        contextTracker: contextTracker,
+        physicalEventFilter: { event in
+            ProductShortcutPolicy.shouldCapture(event)
+        }
     ) { [weak self] signal in
         Task { @MainActor [weak self] in
             self?.handleSwitchSignal(signal)
@@ -27,6 +37,21 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private lazy var shortcutMonitor = GlobalShortcutMonitor { [weak self] in
         self?.replayPreviousBurst()
+    }
+
+    private lazy var settingsController = SettingsWindowController(
+        preferences: preferences,
+        inputSources: inputSources,
+        launchAtLogin: launchAtLogin
+    ) { [weak self] in
+        self?.refreshStatusLines()
+    }
+
+    private lazy var onboardingController = OnboardingWindowController(
+        preferences: preferences
+    ) { [weak self] in
+        self?.settingsController.reload()
+        self?.restartMonitoring()
     }
 
     private var monitoringStarted = false
@@ -41,6 +66,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let latestBurstItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let chineseTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let latinTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let undoItem = NSMenuItem(title: AppStrings.undoLastRecovery, action: #selector(undoLastRecovery), keyEquivalent: "")
     private let showHUDItem = NSMenuItem(title: AppStrings.showSwitchHUD, action: #selector(toggleSwitchHUD), keyEquivalent: "")
 
     override init() {
@@ -54,6 +80,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         shortcutMonitor.start()
         installLifecycleObservers()
         startMonitoring()
+
+        if !preferences.hasCompletedOnboarding {
+            DispatchQueue.main.async { [weak self] in
+                self?.onboardingController.show()
+            }
+        }
     }
 
     func stop() async {
@@ -100,11 +132,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         addMenuItem(title: AppStrings.restartMonitoring, action: #selector(restartMonitoring))
         menu.addItem(.separator())
 
-        let replayItem = addMenuItem(title: AppStrings.replayLastBurst, action: #selector(replayPreviousBurst))
-        replayItem.keyEquivalent = ""
+        addMenuItem(title: AppStrings.replayLastBurst, action: #selector(replayPreviousBurst))
         let shortcutHint = NSMenuItem(title: AppStrings.replayLastBurstShortcut, action: nil, keyEquivalent: "")
         shortcutHint.isEnabled = false
         menu.addItem(shortcutHint)
+
+        undoItem.target = self
+        undoItem.isEnabled = false
+        menu.addItem(undoItem)
 
         addMenuItem(title: AppStrings.markChinese, action: #selector(markCurrentAsChineseTarget))
         addMenuItem(title: AppStrings.markLatin, action: #selector(markCurrentAsLatinTarget))
@@ -116,6 +151,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         addMenuItem(title: AppStrings.clearRecentBuffer, action: #selector(clearRecentBuffer))
         menu.addItem(.separator())
 
+        addMenuItem(title: AppStrings.settingsMenu, action: #selector(openSettings))
+        addMenuItem(title: AppStrings.onboardingMenu, action: #selector(openOnboarding))
         addMenuItem(title: AppStrings.copyDiagnostics, action: #selector(copyDiagnostics))
         addMenuItem(title: AppStrings.openGitHub, action: #selector(openGitHub))
         menu.addItem(.separator())
@@ -173,13 +210,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         guard preferences.showSwitchHUD else { return }
         let sourceName = displayName(for: signal.newInputSourceID)
-        if let burst = signal.previousBurst, !burst.events.isEmpty {
-            let preview = burstPreview(burst)
-            let detail = preview.isEmpty ? AppStrings.replayAvailable : "\(preview)  ·  \(AppStrings.replayAvailable)"
-            hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)", detail: detail, duration: 3.0)
-        } else {
+
+        guard preferences.suggestionsEnabled,
+              let burst = signal.previousBurst,
+              !burst.events.isEmpty
+        else {
             hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)")
+            return
         }
+
+        let preview = burstPreview(burst)
+        let detail = preview.isEmpty ? AppStrings.replayAvailable : "\(preview)  ·  \(AppStrings.replayAvailable)"
+        hud.show(title: "\(AppStrings.switchedTitle) · \(sourceName)", detail: detail, duration: 3.0)
     }
 
     @objc private func replayPreviousBurst() {
@@ -194,6 +236,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             return
         }
 
+        // First activation only presents a non-focus-stealing warning. The
+        // second activation performs the probe so an NSAlert never steals the
+        // editor focus that we are about to validate.
         guard showExperimentalReplayWarningIfNeeded() else { return }
 
         Task { [weak self] in
@@ -207,19 +252,41 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
 
             do {
-                try replayEngine.replay(
+                let plan = try SmokeReplayPlanner.makePlan(
                     events: burst.events,
+                    currentFocus: InputPrivacyGuard.focusedContext()
+                )
+
+                try replayEngine.replay(
+                    events: plan.events,
                     through: signal.newInputSourceID,
                     sourceSettleDelayMicroseconds: 50_000,
                     interKeyDelayMicroseconds: 2_500
                 )
+
                 let preview = burstPreview(burst)
                 let target = displayName(for: signal.newInputSourceID)
+
+                // One-shot probe: do not leave a stale replay candidate around
+                // after successful replay where another shortcut press could
+                // append the same content again by accident.
+                await runtime.clearSensitiveRecentState()
+                lastSwitchSignal = nil
+                refreshStatusLines()
+
                 hud.show(
                     title: AppStrings.replaySent,
                     detail: preview.isEmpty ? target : "\(preview)  →  \(target)",
                     duration: 3.4
                 )
+            } catch let rejection as SmokeReplayRejection {
+                let title: String
+                if rejection == .focusChanged || rejection == .focusUnavailable {
+                    title = AppStrings.focusChanged
+                } else {
+                    title = AppStrings.replayBlocked
+                }
+                hud.show(title: title, detail: rejection.description, duration: 4.0)
             } catch {
                 hud.show(title: AppStrings.replayFailed, detail: String(describing: error), duration: 3.0)
             }
@@ -228,23 +295,42 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func showExperimentalReplayWarningIfNeeded() -> Bool {
         guard !preferences.hasShownReplayWarning else { return true }
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = AppStrings.experimentalWarningTitle
-        alert.informativeText = AppStrings.experimentalWarningBody
-        alert.addButton(withTitle: AppStrings.continueButton)
-        alert.addButton(withTitle: AppStrings.cancelButton)
-
-        let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return false }
         preferences.hasShownReplayWarning = true
-        return true
+        hud.show(
+            title: AppStrings.experimentalWarningTitle,
+            detail: AppStrings.choose(
+                "第一次只显示提示，不执行 Replay。确认当前仍在测试文本框后，再按一次 ⌃⌥R。",
+                "The first press only shows this warning. Keep focus in the test field, then press ⌃⌥R again."
+            ),
+            duration: 5.0
+        )
+        return false
+    }
+
+    @objc private func undoLastRecovery() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard try await recoveryCoordinator.restoreLast() != nil else {
+                    hud.show(title: AppStrings.undoUnavailable)
+                    return
+                }
+                hud.show(title: AppStrings.choose("已恢复到修正前内容", "Restored the pre-recovery content"))
+            } catch {
+                hud.show(
+                    title: AppStrings.choose("撤销恢复失败", "Undo Recovery Failed"),
+                    detail: String(describing: error),
+                    duration: 3.5
+                )
+            }
+            refreshUndoAvailability()
+        }
     }
 
     @objc private func markCurrentAsChineseTarget() {
         guard let current = inputSources.current() else { return }
         preferences.preferredChineseInputSourceID = current.id
+        settingsController.reload()
         refreshStatusLines()
         hud.show(title: AppStrings.sourcePinnedChinese, detail: current.localizedName ?? current.id)
     }
@@ -252,6 +338,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func markCurrentAsLatinTarget() {
         guard let current = inputSources.current() else { return }
         preferences.preferredLatinInputSourceID = current.id
+        settingsController.reload()
         refreshStatusLines()
         hud.show(title: AppStrings.sourcePinnedLatin, detail: current.localizedName ?? current.id)
     }
@@ -259,6 +346,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleSwitchHUD() {
         preferences.showSwitchHUD.toggle()
         showHUDItem.state = preferences.showSwitchHUD ? .on : .off
+        settingsController.reload()
     }
 
     @objc private func clearRecentBuffer() {
@@ -269,6 +357,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             refreshStatusLines()
             hud.show(title: AppStrings.cacheCleared)
         }
+    }
+
+    @objc private func openSettings() {
+        settingsController.show()
+    }
+
+    @objc private func openOnboarding() {
+        onboardingController.show()
     }
 
     @objc private func copyDiagnostics() {
@@ -285,6 +381,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "currentInputSource=\(report.currentInputSource?.id ?? "unknown") [\(report.currentInputSource?.localizedName ?? "")]",
             "preferredChinese=\(preferences.preferredChineseInputSourceID ?? "unset")",
             "preferredLatin=\(preferences.preferredLatinInputSourceID ?? "unset")",
+            "suggestionsEnabled=\(preferences.suggestionsEnabled)",
+            "showSwitchHUD=\(preferences.showSwitchHUD)",
             "availableInputSources=\(report.availableInputSources.count)"
         ]
 
@@ -354,6 +452,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         latinTargetItem.title = "英文目标 / Latin: \(displayName(for: preferences.preferredLatinInputSourceID))"
         showHUDItem.state = preferences.showSwitchHUD ? .on : .off
         refreshStatusIcon(secure: secure)
+        refreshUndoAvailability()
+    }
+
+    private func refreshUndoAvailability() {
+        Task { [weak self] in
+            guard let self else { return }
+            let transaction = await recoveryCoordinator.lastRestorableTransaction
+            undoItem.isEnabled = transaction != nil
+        }
     }
 
     private func refreshStatusIcon(secure: Bool? = nil) {
