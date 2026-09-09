@@ -36,6 +36,7 @@ enum AppStrings {
     static var noReplayCandidate: String { choose("没有可重放的上一段输入", "No previous burst is available to replay") }
     static var replaySent: String { choose("已发送实验重放，原文未删除", "Experimental replay sent; original text was not deleted") }
     static var replayFailed: String { choose("实验重放失败", "Experimental replay failed") }
+    static var secureInputBlocked: String { choose("安全输入环境：已停止捕获与 Replay", "Secure input detected: capture and replay are blocked") }
     static var monitoringFailed: String { choose("监听启动失败，请先授权辅助功能", "Monitoring failed. Grant Accessibility permission first") }
     static var cacheCleared: String { choose("最近输入缓存已清空", "Recent input buffer cleared") }
     static var copiedDiagnostics: String { choose("诊断信息已复制", "Diagnostics copied") }
