@@ -66,13 +66,19 @@ public actor InputContextTracker {
     public func ingest(_ event: CapturedKeyEvent) {
         guard !event.isSynthetic else { return }
 
-        // New user typing after a source switch means the user has moved on;
-        // never keep a stale recovery offer alive while new content is entered.
-        if pendingSwitchSignal != nil {
-            pendingSwitchSignal = nil
-        }
+        // Any new physical input means the previous switch suggestion is stale.
+        pendingSwitchSignal = nil
 
-        if currentEpoch?.inputSourceID != event.inputSourceID {
+        if let epoch = currentEpoch, focusChanged(from: epoch, to: event) {
+            // App / focused field changes are hard boundaries. Never allow a
+            // burst from one text field to become a candidate in another.
+            startEpoch(
+                inputSourceID: event.inputSourceID,
+                at: event.timestamp,
+                sourcePID: event.sourcePID,
+                focusIdentity: event.focusIdentity
+            )
+        } else if currentEpoch?.inputSourceID != event.inputSourceID {
             startEpoch(
                 inputSourceID: event.inputSourceID,
                 at: event.timestamp,
@@ -180,6 +186,20 @@ public actor InputContextTracker {
 
     public func epoch() -> InputSourceEpoch? {
         currentEpoch
+    }
+
+    private func focusChanged(from epoch: InputSourceEpoch, to event: CapturedKeyEvent) -> Bool {
+        if epoch.sourcePID != 0, event.sourcePID != 0, epoch.sourcePID != event.sourcePID {
+            return true
+        }
+
+        if let oldFocus = epoch.focusIdentity,
+           let newFocus = event.focusIdentity,
+           oldFocus != newFocus {
+            return true
+        }
+
+        return false
     }
 
     private func startEpoch(
