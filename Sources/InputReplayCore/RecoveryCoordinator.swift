@@ -44,7 +44,7 @@ public struct RecoveryPlan: Sendable, Equatable {
     }
 }
 
-public struct RecoveryVerificationResult: Sendable, Equatable {
+public struct RecoveryVerificationResult: Sendable {
     public let succeeded: Bool
     /// Exact range currently occupied by replay output. Required for safe
     /// rollback after replay because IME output length cannot be inferred from
