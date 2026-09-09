@@ -5,11 +5,15 @@ public struct CapturedKeyEvent: Sendable, Equatable {
     public let timestamp: TimeInterval
     public let keyCode: CGKeyCode
     public let flagsRawValue: UInt64
+    /// Unicode projection attached to the event at capture time. This is used
+    /// for detection/boundary analysis only. Replay always uses the physical
+    /// virtual key code and flags instead of trusting this text projection.
     public let characters: String?
     public let sourcePID: pid_t
     public let focusIdentity: String?
     public let inputSourceID: String
     public let isSynthetic: Bool
+    public let isRepeat: Bool
 
     public init(
         timestamp: TimeInterval,
@@ -19,7 +23,8 @@ public struct CapturedKeyEvent: Sendable, Equatable {
         sourcePID: pid_t,
         focusIdentity: String?,
         inputSourceID: String,
-        isSynthetic: Bool
+        isSynthetic: Bool,
+        isRepeat: Bool = false
     ) {
         self.timestamp = timestamp
         self.keyCode = keyCode
@@ -29,6 +34,7 @@ public struct CapturedKeyEvent: Sendable, Equatable {
         self.focusIdentity = focusIdentity
         self.inputSourceID = inputSourceID
         self.isSynthetic = isSynthetic
+        self.isRepeat = isRepeat
     }
 
     public var flags: CGEventFlags {
