@@ -33,17 +33,28 @@ public final class InputReplayRuntime: @unchecked Sendable {
         guard !running else { return true }
 
         if let current = inputSources.current() {
+            let focus = InputPrivacyGuard.focusedContext()
             _ = await contextTracker.inputSourceDidChange(
                 to: current.id,
-                sourcePID: 0,
-                focusIdentity: nil
+                sourcePID: focus?.processID ?? 0,
+                focusIdentity: focus?.focusIdentity
             )
         }
 
         inputSources.startObserving { [weak self] source in
             guard let self, let source else { return }
             Task {
-                guard let signal = await self.contextTracker.inputSourceDidChange(to: source.id) else {
+                let focus = InputPrivacyGuard.focusedContext()
+                if InputPrivacyGuard.isSecureEventInputEnabled || focus?.isSecure == true {
+                    await self.clearSensitiveRecentState()
+                    return
+                }
+
+                guard let signal = await self.contextTracker.inputSourceDidChange(
+                    to: source.id,
+                    sourcePID: focus?.processID ?? 0,
+                    focusIdentity: focus?.focusIdentity
+                ) else {
                     return
                 }
                 self.suggestionHandler(signal)
