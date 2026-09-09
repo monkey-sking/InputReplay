@@ -9,7 +9,8 @@ let package = Package(
     ],
     products: [
         .library(name: "InputReplayCore", targets: ["InputReplayCore"]),
-        .executable(name: "InputReplayProbe", targets: ["InputReplayProbe"])
+        .executable(name: "InputReplayProbe", targets: ["InputReplayProbe"]),
+        .executable(name: "InputReplayApp", targets: ["InputReplayApp"])
     ],
     targets: [
         .target(
@@ -22,6 +23,14 @@ let package = Package(
         .executableTarget(
             name: "InputReplayProbe",
             dependencies: ["InputReplayCore"]
+        ),
+        .executableTarget(
+            name: "InputReplayApp",
+            dependencies: ["InputReplayCore"],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("ApplicationServices")
+            ]
         ),
         .testTarget(
             name: "InputReplayCoreTests",
