@@ -5,7 +5,9 @@ final class AppPreferences {
         static let preferredChineseInputSourceID = "preferredChineseInputSourceID"
         static let preferredLatinInputSourceID = "preferredLatinInputSourceID"
         static let showSwitchHUD = "showSwitchHUD"
+        static let suggestionsEnabled = "suggestionsEnabled"
         static let hasShownReplayWarning = "hasShownReplayWarning"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
     }
 
     private let defaults: UserDefaults
@@ -14,6 +16,9 @@ final class AppPreferences {
         self.defaults = defaults
         if defaults.object(forKey: Key.showSwitchHUD) == nil {
             defaults.set(true, forKey: Key.showSwitchHUD)
+        }
+        if defaults.object(forKey: Key.suggestionsEnabled) == nil {
+            defaults.set(true, forKey: Key.suggestionsEnabled)
         }
     }
 
@@ -32,8 +37,22 @@ final class AppPreferences {
         set { defaults.set(newValue, forKey: Key.showSwitchHUD) }
     }
 
+    var suggestionsEnabled: Bool {
+        get { defaults.bool(forKey: Key.suggestionsEnabled) }
+        set { defaults.set(newValue, forKey: Key.suggestionsEnabled) }
+    }
+
     var hasShownReplayWarning: Bool {
         get { defaults.bool(forKey: Key.hasShownReplayWarning) }
         set { defaults.set(newValue, forKey: Key.hasShownReplayWarning) }
+    }
+
+    var hasCompletedOnboarding: Bool {
+        get { defaults.bool(forKey: Key.hasCompletedOnboarding) }
+        set { defaults.set(newValue, forKey: Key.hasCompletedOnboarding) }
+    }
+
+    func resetDevelopmentWarnings() {
+        hasShownReplayWarning = false
     }
 }
