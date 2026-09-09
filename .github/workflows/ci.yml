@@ -13,9 +13,9 @@ permissions:
 
 jobs:
   swift:
-    name: Swift build & tests
+    name: Swift build, tests & app package
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -30,8 +30,23 @@ jobs:
       - name: Resolve package
         run: swift package resolve
 
-      - name: Build
+      - name: Build all products
         run: swift build -v
 
-      - name: Test
+      - name: Test core
         run: swift test -v
+
+      - name: Package menu bar app
+        run: |
+          SKIP_CODESIGN=1 bash scripts/package-app.sh
+          plutil -lint dist/InputReplay.app/Contents/Info.plist
+          test -x dist/InputReplay.app/Contents/MacOS/InputReplay
+          test -f dist/InputReplay-0.1.0-dev.zip
+
+      - name: Upload development app
+        uses: actions/upload-artifact@v4
+        with:
+          name: InputReplay-dev-${{ github.sha }}
+          path: dist/InputReplay-0.1.0-dev.zip
+          if-no-files-found: error
+          retention-days: 7
