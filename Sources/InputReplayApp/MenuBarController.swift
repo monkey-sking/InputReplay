@@ -280,6 +280,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             "secureEventInput=\(InputPrivacyGuard.isSecureEventInputEnabled)",
             "focusedContextSecure=\(InputPrivacyGuard.focusedContext()?.isSecure ?? false)",
             "monitoringStarted=\(monitoringStarted)",
+            "typedContentIncluded=false",
             "frontmostApp=\(report.frontmostAppBundleIdentifier ?? "unknown") [\(report.frontmostAppName ?? "")]",
             "currentInputSource=\(report.currentInputSource?.id ?? "unknown") [\(report.currentInputSource?.localizedName ?? "")]",
             "preferredChinese=\(preferences.preferredChineseInputSourceID ?? "unset")",
@@ -294,7 +295,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 lines.append("lastBurstEvents=\(burst.events.count)")
                 lines.append("lastBurstProjectionReliable=\(projection.isTextProjectionReliable)")
                 lines.append("lastBurstHadBackspace=\(projection.hadBackspace)")
-                lines.append("lastBurstPreview=\(sanitizeEvidence(projection.visibleTextEstimate))")
+                lines.append("lastBurstProjectedCharacterCount=\(projection.characters.count)")
             }
         }
 
@@ -373,12 +374,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if text.count <= 42 { return text }
         let end = text.index(text.startIndex, offsetBy: 39)
         return String(text[..<end]) + "…"
-    }
-
-    private func sanitizeEvidence(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     private func displayName(for inputSourceID: String?) -> String {
