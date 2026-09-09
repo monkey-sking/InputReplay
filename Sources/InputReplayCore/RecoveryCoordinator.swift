@@ -5,7 +5,6 @@ public enum RecoveryCoordinatorError: Error, Sendable, Equatable {
     case unsafeMutation
     case originalInputSourceUnavailable
     case targetInputSourceUnavailable
-    case rollbackFailed
     case replayFailed
     case verificationFailed
     case restoreFailed
@@ -45,6 +44,19 @@ public struct RecoveryPlan: Sendable, Equatable {
     }
 }
 
+public struct RecoveryVerificationResult: Sendable, Equatable {
+    public let succeeded: Bool
+    /// Exact range currently occupied by replay output. Required for safe
+    /// rollback after replay because IME output length cannot be inferred from
+    /// raw key count.
+    public let replayOutputRange: CFRange?
+
+    public init(succeeded: Bool, replayOutputRange: CFRange?) {
+        self.succeeded = succeeded
+        self.replayOutputRange = replayOutputRange
+    }
+}
+
 public protocol RecoveryTextEditing: Sendable {
     func replace(snapshot: AXTextSnapshot, with replacement: String) throws
     func replace(range: CFRange, with replacement: String) throws
@@ -70,14 +82,16 @@ extension ReplayEngine: RecoveryReplaying {
 }
 
 public protocol RecoveryVerifying: Sendable {
-    func verify(plan: RecoveryPlan) async -> Bool
+    func verify(plan: RecoveryPlan) async -> RecoveryVerificationResult
 }
 
-/// Safe default: until a host/IME-specific verifier exists, recovery must not
-/// be promoted to committed automatically.
+/// Safe default: unknown host/IME combinations cannot prove either successful
+/// recovery or the exact replay-output range, so they are never auto-committed.
 public struct ConservativeRecoveryVerifier: RecoveryVerifying {
     public init() {}
-    public func verify(plan: RecoveryPlan) async -> Bool { false }
+    public func verify(plan: RecoveryPlan) async -> RecoveryVerificationResult {
+        RecoveryVerificationResult(succeeded: false, replayOutputRange: nil)
+    }
 }
 
 public actor RecoveryCoordinator {
@@ -88,6 +102,7 @@ public actor RecoveryCoordinator {
 
     public private(set) var activeTransaction: RecoveryTransaction?
     public private(set) var lastRestorableTransaction: RecoveryTransaction?
+    private var lastReplayOutputRange: CFRange?
 
     public init(
         textEditor: RecoveryTextEditing = AXTextEditor(),
@@ -101,8 +116,8 @@ public actor RecoveryCoordinator {
         self.verifier = verifier
     }
 
-    /// Executes the destructive portion only when a reliable pre-mutation
-    /// restore plan already exists. Verification failure triggers restoration.
+    /// Executes destructive recovery only when the caller has already proved
+    /// that a reliable restore path exists for this host/IME combination.
     @discardableResult
     public func recover(_ plan: RecoveryPlan) async throws -> RecoveryTransaction {
         var transaction = RecoveryTransaction(snapshot: plan.preMutationSnapshot)
@@ -113,6 +128,7 @@ public actor RecoveryCoordinator {
         }
 
         activeTransaction = transaction
+        lastReplayOutputRange = nil
 
         do {
             transaction.state = .rollingBack
@@ -135,8 +151,14 @@ public actor RecoveryCoordinator {
 
             transaction.state = .verifying
             activeTransaction = transaction
-            guard await verifier.verify(plan: plan) else {
+            let verification = await verifier.verify(plan: plan)
+            lastReplayOutputRange = verification.replayOutputRange
+
+            guard verification.succeeded else {
                 throw RecoveryCoordinatorError.verificationFailed
+            }
+            guard verification.replayOutputRange != nil else {
+                throw RecoveryCoordinatorError.unsafeMutation
             }
 
             transaction.state = .committed
@@ -144,8 +166,21 @@ public actor RecoveryCoordinator {
             lastRestorableTransaction = transaction
             return transaction
         } catch {
+            // If replay already occurred, restoration is only safe when the
+            // verifier identified the exact resulting text/composition range.
+            let replayHadStarted = transaction.state == .replaying || transaction.state == .verifying
+            if replayHadStarted && lastReplayOutputRange == nil {
+                transaction.state = .aborted("Replay output range is unknown; refusing guessed restore")
+                activeTransaction = transaction
+                throw RecoveryCoordinatorError.restoreFailed
+            }
+
             do {
-                transaction = try restore(plan: plan, transaction: transaction)
+                transaction = try restore(
+                    plan: plan,
+                    transaction: transaction,
+                    replayOutputRange: lastReplayOutputRange
+                )
                 lastRestorableTransaction = nil
             } catch {
                 transaction.state = .aborted("Recovery failed and restore also failed")
@@ -158,8 +193,7 @@ public actor RecoveryCoordinator {
         }
     }
 
-    /// Restores the pre-mutation text and original input source. This is the
-    /// safety path for failed verification and for explicit user undo.
+    /// User-facing undo for a successfully verified recovery.
     @discardableResult
     public func restoreLast() throws -> RecoveryTransaction? {
         guard let transaction = lastRestorableTransaction else { return nil }
@@ -167,7 +201,8 @@ public actor RecoveryCoordinator {
         guard
             let originalText = snapshot.originalText,
             let location = snapshot.selectedRangeLocation,
-            let length = snapshot.selectedRangeLength
+            let length = snapshot.selectedRangeLength,
+            let replayOutputRange = lastReplayOutputRange
         else {
             throw RecoveryCoordinatorError.restoreFailed
         }
@@ -180,23 +215,35 @@ public actor RecoveryCoordinator {
             restoreIsReliable: snapshot.restoreIsReliable
         )
 
-        var restored = try restore(plan: plan, transaction: transaction)
+        var restored = try restore(
+            plan: plan,
+            transaction: transaction,
+            replayOutputRange: replayOutputRange
+        )
         restored.state = .restored
         lastRestorableTransaction = nil
+        lastReplayOutputRange = nil
         return restored
     }
 
-    private func restore(plan: RecoveryPlan, transaction: RecoveryTransaction) throws -> RecoveryTransaction {
+    private func restore(
+        plan: RecoveryPlan,
+        transaction: RecoveryTransaction,
+        replayOutputRange: CFRange?
+    ) throws -> RecoveryTransaction {
         var transaction = transaction
         transaction.state = .restoring
         activeTransaction = transaction
 
-        // After rollback the target range has length 0. After replay we cannot
-        // safely infer the committed/composition length generically, so the
-        // first verified host adapter must supply stronger restoration data
-        // before automatic full recovery is enabled.
-        let restoreRange = CFRange(location: plan.textSnapshot.rangeLocation, length: 0)
-        try textEditor.replace(range: restoreRange, with: plan.textSnapshot.text)
+        let range: CFRange
+        if let replayOutputRange {
+            range = replayOutputRange
+        } else {
+            // Safe only before replay has produced unknown output.
+            range = CFRange(location: plan.textSnapshot.rangeLocation, length: 0)
+        }
+
+        try textEditor.replace(range: range, with: plan.textSnapshot.text)
 
         guard inputSources.select(id: plan.originalInputSourceID) else {
             throw RecoveryCoordinatorError.originalInputSourceUnavailable
