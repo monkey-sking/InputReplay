@@ -72,7 +72,17 @@ public final class InputEventMonitor: @unchecked Sendable {
     private func consume(_ event: CGEvent) {
         let marker = event.getIntegerValueField(.eventSourceUserData)
         let isSynthetic = marker == SyntheticEventMarker.value
-        let sourcePID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
+        let focusedContext = InputPrivacyGuard.focusedContext()
+
+        // Never put physical key events from password / Secure Event Input
+        // contexts into the recent-input timeline.
+        if !isSynthetic {
+            if InputPrivacyGuard.isSecureEventInputEnabled { return }
+            if focusedContext?.isSecure == true { return }
+        }
+
+        let fallbackPID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
+        let sourcePID = focusedContext?.processID ?? fallbackPID
         let sourceID = inputSources.current()?.id ?? "unknown"
 
         let captured = CapturedKeyEvent(
@@ -81,7 +91,7 @@ public final class InputEventMonitor: @unchecked Sendable {
             flagsRawValue: event.flags.rawValue,
             characters: unicodeProjection(of: event),
             sourcePID: sourcePID,
-            focusIdentity: nil,
+            focusIdentity: focusedContext?.focusIdentity,
             inputSourceID: sourceID,
             isSynthetic: isSynthetic,
             isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
