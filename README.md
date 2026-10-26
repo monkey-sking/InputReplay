@@ -1,5 +1,9 @@
 # InputReplay
 
+<!-- badges:start -->
+[![License](https://img.shields.io/github/license/monkey-sking/InputReplay?style=flat-square)](https://github.com/monkey-sking/InputReplay/blob/main/LICENSE) [![Last commit](https://img.shields.io/github/last-commit/monkey-sking/InputReplay?style=flat-square)](https://github.com/monkey-sking/InputReplay/commits/main) [![views](https://hits.sh/github.com/monkey-sking/InputReplay.svg?style=flat-square&label=views&color=0e75b6)](https://github.com/monkey-sking/InputReplay)
+<!-- badges:end -->
+
 **打错输入法，也不用重打。**  
 *Never retype because of the wrong input mode.*
 
